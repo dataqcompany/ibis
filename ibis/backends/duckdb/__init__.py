@@ -60,6 +60,23 @@ _UDF_INPUT_TYPE_MAPPING = {
 }
 
 
+def _to_pyarrow_table(
+    result: duckdb.DuckDBPyConnection | duckdb.DuckDBPyRelation,
+) -> pa.Table:
+    """Materialize a DuckDB result as a ``pyarrow.Table``.
+
+    duckdb 1.5 deprecated ``fetch_arrow_table()`` in favor of
+    ``to_arrow_table()`` and emits a ``DeprecationWarning`` on every call.
+    Prefer the new name when it exists and fall back to the old one for the
+    older duckdb versions ibis still supports (``duckdb>=0.10.3``), where
+    ``to_arrow_table`` is not yet available.
+    """
+    to_arrow_table = getattr(result, "to_arrow_table", None)
+    if to_arrow_table is not None:
+        return to_arrow_table()
+    return result.fetch_arrow_table()
+
+
 class _Settings:
     def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
         self.con = con
@@ -329,7 +346,7 @@ class Backend(
         except duckdb.CatalogException:
             raise exc.TableNotFound(table_name)
         else:
-            meta = result.fetch_arrow_table()
+            meta = _to_pyarrow_table(result)
 
         names = meta["column_name"].to_pylist()
         types = meta["column_type"].to_pylist()
@@ -353,7 +370,7 @@ class Backend(
             sg.table("schemata", db="information_schema")
         )
         with self._safe_raw_sql(query) as cur:
-            result = cur.fetch_arrow_table()
+            result = _to_pyarrow_table(cur)
         dbs = result[col]
         return self._filter_with_like(dbs.to_pylist(), like)
 
@@ -369,7 +386,7 @@ class Backend(
             query = query.where(sg.column("catalog_name").eq(sge.convert(catalog)))
 
         with self._safe_raw_sql(query) as cur:
-            out = cur.fetch_arrow_table()
+            out = _to_pyarrow_table(cur)
         return self._filter_with_like(out[col].to_pylist(), like=like)
 
     @staticmethod
@@ -901,7 +918,7 @@ class Backend(
             )
             .sql(self.dialect)
         )
-        out = self.con.execute(sql).fetch_arrow_table()
+        out = _to_pyarrow_table(self.con.execute(sql))
 
         return self._filter_with_like(out[col].to_pylist(), like)
 
@@ -1725,7 +1742,7 @@ class Backend(
 
     def _get_schema_using_query(self, query: str) -> sch.Schema:
         with self._safe_raw_sql(f"DESCRIBE {query}") as cur:
-            rows = cur.fetch_arrow_table()
+            rows = _to_pyarrow_table(cur)
 
         rows = rows.to_pydict()
 
