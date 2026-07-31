@@ -428,6 +428,8 @@ class Backend(SQLBackend, CanCreateDatabase, UrlFromPath, PyArrowExampleLoader):
             Ibis creates temporary Parquet files in Databricks to store the data.
             This parameter specifies the volume to use for that storage, e.g. "/Volumes/my_volume".
             If not provided, a unique volume path will be generated using the current user's username, Python version, and process ID the first time an in-memory table is executed.
+            A volume passed here is expected to exist already and is never created, so
+            connections without the CREATE VOLUME privilege can still use memtables.
         """
         new_backend = cls()
         new_backend._can_reconnect = False
@@ -575,7 +577,12 @@ class MemtableManager:
     def __init__(self, backend: Backend, volume_path: str | None):
         self._backend = backend
         self._volume_path = volume_path
-        self._is_volume_created = False
+        # A caller-supplied volume is taken to already exist, so it is never
+        # created here. Only generated paths are created. This lets deployments
+        # against read-only catalogs point at a pre-provisioned volume and keep
+        # CREATE VOLUME out of the privileges they have to grant; if the volume
+        # is missing, the PUT fails with Databricks' own "volume not found".
+        self._is_volume_created = volume_path is not None
 
     def register_in_memory_table(self, op: ops.InMemoryTable) -> None:
         import pyarrow.parquet as pq
